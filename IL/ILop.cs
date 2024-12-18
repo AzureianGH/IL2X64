@@ -1,4 +1,5 @@
-﻿using System;
+﻿using IL2X64.Error;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -278,7 +279,7 @@ namespace IL2X64.IL.Syntax
         public string Name;
         public ILOpCodes OpCode;
         public byte[] Operands;
-        public byte TotalOperands;
+        public uint TotalOperands;
     }
     public struct ILField
     {
@@ -295,6 +296,29 @@ namespace IL2X64.IL.Syntax
             return a.Name == b.Name;
         }
     }
+    [Flags]
+    public enum ILProperties
+    {
+        HideBySig = 0x00000010,    // Method is not shown in the signature
+        Public = 0x00000006,        // Public visibility
+        Private = 0x00000007,       // Private visibility
+        Instance = 0x00000000,      // Instance member
+        Static = 0x00000010,        // Static member
+
+        Final = 0x00000100,         // Final method (can’t be overridden)
+        Virtual = 0x00000200,       // Virtual method (can be overridden)
+        Abstract = 0x00000400,      // Abstract method (requires overriding in derived classes)
+        SpecialName = 0x00000800,   // Used for special methods (e.g., operators, indexers)
+        PInvokeImpl = 0x00002000,   // Indicates the method is a P/Invoke method
+        UnmanagedExport = 0x00004000, // Indicates the method is unmanaged (e.g., a native method)
+        RTSpecialName = 0x00008000, // Special name, used for system methods
+        HasSecurity = 0x00010000,   // Method has associated security requirements
+        RequireSecObject = 0x00020000, // Method requires a security object
+
+        // Flags used in method attributes:
+        StaticConstructor = Static | SpecialName, // Special static constructor
+        MethodImplementationFlags = 0x00000100 | 0x00000200 | 0x00000400 | 0x00000800, // Combination of method type flags
+    }
 
     public struct ILMethod
     {
@@ -303,6 +327,7 @@ namespace IL2X64.IL.Syntax
         public string[] Parameters;
         public string[] Locals;
         public string[] Code;
+        public ILProperties Properties;
     }
 
     public struct ILClass
@@ -310,6 +335,7 @@ namespace IL2X64.IL.Syntax
         public string Name;
         public ILField[] Fields;
         public ILMethod[] Methods;
+        public ILProperties Properties;
     }
 
     public struct ILAssembly
@@ -1018,8 +1044,8 @@ namespace IL2X64.IL.Syntax
                     };
 
                 case 0x45:
-                    //calculate skipbytes from number of cases
-                    pSkipBytes = BitConverter.ToUInt32(pByte, (int)pIndex + 1) * 4 + 4;
+                    // skip bytes based on num of cases
+                    pSkipBytes = (uint)BitConverter.ToInt32(pByte, (int)pIndex + 1) * 4 + 4;
                     return new ILInstruction
                     {
                         Name = "switch",
@@ -2530,10 +2556,6 @@ namespace IL2X64.IL.Syntax
 
             return fields.ToArray();
         }
-        class testclass
-        {
-            int value__;
-        }
         private ILMethod[] ParseMethods(MetadataReader metadataReader, TypeDefinition typeDef)
         {
             var methods = new List<ILMethod>();
@@ -2543,7 +2565,7 @@ namespace IL2X64.IL.Syntax
                 var method = metadataReader.GetMethodDefinition(methodHandle);
                 string methodName = metadataReader.GetString(method.Name);
 
-                // decode the method signature
+                // Decode the method signature
                 var signature = method.DecodeSignature(new TypeNameDecoder(metadataReader), null);
                 var parameters = new List<string>();
                 foreach (var parameter in signature.ParameterTypes)
@@ -2555,24 +2577,31 @@ namespace IL2X64.IL.Syntax
                 var locals = new List<string>();
                 var code = new List<string>();
                 MethodBodyBlock body = mPERdr.GetMethodBody(method.RelativeVirtualAddress);
-                //print out each byte
+
+                // Print out each byte
                 foreach (var b in body.GetILBytes())
                 {
                     code.Add(b.ToString("X2"));
                 }
 
+                // Extracting method flags
+                ILProperties properties = (ILProperties)method.Attributes;
+
+                // Add the method information to the list
                 methods.Add(new ILMethod
                 {
                     Name = methodName,
                     ReturnType = returnType,
                     Parameters = parameters.ToArray(),
                     Locals = locals.ToArray(),
-                    Code = code.ToArray()
+                    Code = code.ToArray(),
+                    Properties = properties // Add the extracted properties to the ILMethod
                 });
             }
 
             return methods.ToArray();
         }
+
 
         public ILClass[] GetClasses()
         {
@@ -2603,101 +2632,124 @@ namespace IL2X64.IL.Syntax
                 Console.Write(text);
             }
         }
-        public void PrintILInfo(string outfile = "", bool CLike = false)
+        bool useVerbose = false;
+        private void VerboseWrite(string text)
         {
-            
+            if (useVerbose)
+            {
+                Console.WriteLine(text);
+            }
+        }
+        public void PrintILInfo(string outfile = "", bool CLike = false, bool Verbose = false)
+        {
+            useVerbose = Verbose;
             ulong closeparen = 0;
             if (outfile != "")
             {
                 fs = new FileStream(outfile, FileMode.Create);
+                VerboseWrite("Opened file for writing output to: " + outfile);
             }
             else
             {
                 fs = null;
+                VerboseWrite("No file specified for output. Output will be written to the console.");
             }
 
+            // Iterating over classes
             foreach (var ilClass in mClasses)
             {
+                VerboseWrite($"Processing class: {ilClass.Name}");
+
                 if (CLike)
                 {
                     closeparen++;
-                    bool isEnum = true;
+                    bool isEnum = false;
+
+                    // Check if the class is an Enum (based on its first field being 'value__')
                     if (ilClass.Methods.Length == 0)
                     {
-                        //check if first field is "value__"
-                        foreach (var field in ilClass.Fields)
+                        if (ilClass.Fields.Length >= 1 && ilClass.Fields[0].Name == "value__")
                         {
-                            //if its type is the name of the class, its an enum, but if one of the fields is not the name of the class, its not an enum
-                            if (field.Type != ilClass.Name)
-                            {
-                                isEnum = false;
-                                break;
-                            }
+                            isEnum = true;
+                            VerboseWrite($"Detected Enum: {ilClass.Name}");
                         }
-                        if (ilClass.Fields.Length >= 1)
-                        {
-                            if (ilClass.Fields[0].Name != "value__")
-                            {
-                                isEnum = false;
-                            }
-                        }
-                        
                     }
 
+                    // Handle Enum or Class
                     if (!isEnum)
                     {
+                        VerboseWrite($"Class detected: {ilClass.Name}");
                         WriteLine($"class {ilClass.Name}");
                         WriteLine("{");
                         foreach (var field in ilClass.Fields)
                         {
+                            VerboseWrite($"Field: {field.Name} ({field.Type})");
                             WriteLine($"  {field.Type} {field.Name}; ");
                         }
                     }
                     else
                     {
+                        VerboseWrite($"Enum detected: {ilClass.Name}");
                         WriteLine($"enum {ilClass.Name}");
                         WriteLine("{");
                         foreach (var field in ilClass.Fields)
                         {
-                            //check if its the last field
-                            if (field != ilClass.Fields[ilClass.Fields.Length - 1])
-                            {
-                                WriteLine($"  {field.Name}, ");
-                            }
-                            else
-                            {
-                                WriteLine($"  {field.Name}");
-                            }
+                            VerboseWrite($"Field: {field.Name} ({field.Type})");
+                            WriteLine(field != ilClass.Fields[ilClass.Fields.Length - 1]
+                                ? $"  {field.Name}, "
+                                : $"  {field.Name}");
                         }
                     }
-                    
+
                 }
                 else
                 {
                     WriteLine($"Class: {ilClass.Name}");
                     foreach (var field in ilClass.Fields)
                     {
+                        VerboseWrite($"Field: {field.Name} ({field.Type})");
                         WriteLine($"  Field: {field.Name} ({field.Type})");
                     }
                 }
-               
+
+                // Iterating over methods
                 foreach (var method in ilClass.Methods)
                 {
+                    VerboseWrite($"Processing method: {method.Name} with return type {method.ReturnType}");
+
                     if (CLike)
                     {
-                        Write($"  {method.ReturnType} {method.Name}(");
+                        Write("  ");
+                        if (method.Properties.HasFlag(ILProperties.Static)) Write("static ");
+                        if (method.Properties.HasFlag(ILProperties.Public)) Write("public ");
+                        if (method.Properties.HasFlag(ILProperties.Private)) Write("private ");
+                        if (method.Properties.HasFlag(ILProperties.Final)) Write("final ");
+                        if (method.Properties.HasFlag(ILProperties.Virtual)) Write("virtual ");
+                        if (method.Properties.HasFlag(ILProperties.Abstract)) Write("abstract ");
+                        if (method.Properties.HasFlag(ILProperties.SpecialName)) Write("specialname ");
+
+                        if (method.Name == ".ctor" || method.Name == ".cctor")
+                        {
+                            WriteLine($"Void {ilClass.Name}()");
+                        }
+                        else
+                        {
+                            Write($"{method.ReturnType} {method.Name}(");
+                        }
                     }
                     else
                     {
-                        WriteLine($"  Method: {method.Name} ({method.ReturnType})");
+                        WriteLine($"  Method: {method.Name} ({method.ReturnType}) [{method.Properties}]");
                     }
+
+                    // Iterate over parameters
                     uint paramcount = 0;
                     foreach (var parameter in method.Parameters)
                     {
+                        VerboseWrite($"Processing parameter: {parameter}");
                         if (CLike)
                         {
                             Write($"{parameter} param_{paramcount.ToString()}");
-                            //if theres more parameters, add a comma
                             if (paramcount < method.Parameters.Length - 1)
                             {
                                 Write(", ");
@@ -2713,20 +2765,24 @@ namespace IL2X64.IL.Syntax
                         }
                         paramcount++;
                     }
+
                     if (paramcount == 0 && CLike)
                     {
                         WriteLine(")");
                     }
+
                     if (CLike)
                     {
-                        WriteLine("{");
+                        WriteLine("  {");
                     }
+
+                    // Iterate over locals
                     uint loccount = 0;
                     foreach (var local in method.Locals)
                     {
+                        VerboseWrite($"Processing local: {local}");
                         if (CLike)
                         {
-                            //parse the local as a method
                             WriteLine($"  {local} local_{loccount.ToString()}; ");
                             loccount++;
                         }
@@ -2736,63 +2792,32 @@ namespace IL2X64.IL.Syntax
                         }
                     }
 
-                    // Convert method.Code from string array to byte array
+                    // Process method bytecode
                     byte[] code = new byte[method.Code.Length];
                     for (int i = 0; i < method.Code.Length; i++)
                     {
                         code[i] = Convert.ToByte(method.Code[i], 16);
                     }
 
-                    // Parse the byte array
+                    // Parsing bytecode
                     for (ulong i = 0; i < (ulong)code.Length; i++)
                     {
                         uint skipBytes = 0;
                         ILInstruction instr = ByteIL2ILOp(code, i, ref skipBytes);
                         Write($"    IL_{i.ToString("X2")}: {instr.Name}");
+                        VerboseWrite($"Parsing IL instruction: {instr.Name} at index {i}");
 
-                        if (instr.Name == "call")
+                        // Handle specific opcodes (branch, call, load, etc.)
+                        if (instr.Name == "call" || instr.Name == "callvirt")
                         {
-                            // Read the metadata token after the 'call' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
+                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1));
                             Console.ForegroundColor = ConsoleColor.Yellow;
                             WriteLine($" [{ResolveMethodNameFromToken(metadataToken)}]");
                             Console.ResetColor();
                         }
-                        else if (instr.Name == "callvirt")
-                        {
-                            // Read the metadata token after the 'callvirt' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
-                            Console.ForegroundColor = ConsoleColor.Yellow;
-                            WriteLine($" [{ResolveMethodNameFromToken(metadataToken)}]");
-                            Console.ResetColor();
-                        }
-                        else if (instr.Name == "br.s" || instr.Name == "brfalse.s" || instr.Name == "brtrue.s" ||
-                                 instr.Name == "beq.s" || instr.Name == "bge.s" || instr.Name == "bgt.s" ||
-                                 instr.Name == "ble.s" || instr.Name == "blt.s" || instr.Name == "bne.un.s" ||
-                                 instr.Name == "bge.un.s" || instr.Name == "bgt.un.s" || instr.Name == "ble.un.s" ||
-                                 instr.Name == "blt.un.s" || instr.Name == "br" || instr.Name == "brfalse" ||
-                                 instr.Name == "brtrue" || instr.Name == "beq" || instr.Name == "bge" ||
-                                 instr.Name == "bgt" || instr.Name == "ble" || instr.Name == "blt" ||
-                                 instr.Name == "bne.un" || instr.Name == "bge.un" || instr.Name == "bgt.un" ||
-                                 instr.Name == "ble.un" || instr.Name == "blt.un")
-                        {
-                            // Read the offset after the branch opcode (1 byte)
-                            byte offset = code[i + 1];
-                            Console.ForegroundColor = ConsoleColor.Blue;
-                            WriteLine($" <IL_{(i + 2 + offset).ToString("X2")}>");
-                            Console.ResetColor();
-                        }
-                        else if (instr.Name == "UNKNOWN")
-                        {
-                            Console.ForegroundColor = ConsoleColor.Red;
-                            WriteLine($" [0x{code[i].ToString("X2")}]");
-                            Console.ResetColor();
-                        }
-                        //load string
                         else if (instr.Name == "ldstr")
                         {
-                            // Read the metadata token after the 'ldstr' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
+                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1));
                             Console.ForegroundColor = ConsoleColor.Green;
                             try
                             {
@@ -2804,102 +2829,34 @@ namespace IL2X64.IL.Syntax
                             }
                             Console.ResetColor();
                         }
-                        //ldfld
-                        else if (instr.Name == "ldfld" || instr.Name == "stfld")
+                        else if (instr.Name == "newobj" || instr.Name == "initobj")
                         {
-                            // Read the metadata token after the 'ldfld' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
-                            Console.ForegroundColor = ConsoleColor.Magenta;
-                            WriteLine($" [{ResolveFieldNameFromToken(metadataToken)}]");
-                            Console.ResetColor();
-                        }
-                        //obj
-                        else if (instr.Name == "newobj")
-                        {
-                            // Read the metadata token after the 'newobj' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
+                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1));
                             Console.ForegroundColor = ConsoleColor.Magenta;
                             WriteLine($" [{ResolveMethodNameFromToken(metadataToken)}]");
                             Console.ResetColor();
                         }
-                        //initobj
-                        else if (instr.Name == "initobj")
-                        {
-                            // Read the metadata token after the 'initobj' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
-                            Console.ForegroundColor = ConsoleColor.Magenta;
-                            WriteLine($" [{ResolveObjectNameFromToken(metadataToken)}]");
-                            Console.ResetColor();
-                        }
-                        //ldarg
-                        else if (instr.Name == "ldarg" || instr.Name == "starg")
-                        {
-                            // Read the argument index after the 'ldarg' opcode (1 byte)
-                            byte argIndex = code[i + 1];
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            WriteLine($" {argIndex}");
-                            Console.ResetColor();
-                        }
-                        //token
-                        else if (instr.Name == "ldtoken")
-                        {
-                            // Read the metadata token after the 'ldtoken' opcode (4 bytes)
-                            uint metadataToken = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            WriteLine($" [{ResolveObjectNameFromToken(metadataToken)}]");
-                            Console.ResetColor();
-                        }
-                        else if (instr.Name == "unaligned.")
-                        {
-                            // Read the alignment value after the 'unaligned.' opcode (1 byte)
-                            byte alignment = code[i + 1];
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            WriteLine($" {alignment}");
-                            Console.ResetColor();
-                        }
-                        else if (instr.Name == "volatile.")
-                        {
-                            // Read the alignment value after the 'volatile.' opcode (1 byte)
-                            byte alignment = code[i + 1];
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            WriteLine($" {alignment}");
-                            Console.ResetColor();
-                        }
-                        //switch
-                        /*
-                         example:
-                        switch
-                        ( IL_number,
-                          IL_number,
-                          IL_number,
-                        )
-                         */
-
                         else if (instr.Name == "switch")
                         {
-                            // Read the number of cases after the 'switch' opcode (4 bytes)
-                            uint numCases = BitConverter.ToUInt32(code, (int)(i + 1)); // Little-endian
-                            Console.ForegroundColor = ConsoleColor.DarkYellow;
-                            Write($" ( // {numCases} Cases\n ");
-
-                            for (uint j = 0; j < numCases; j++)
+                            uint numCases = BitConverter.ToUInt32(code, (int)(i + 1));
+                            VerboseWrite($"Switch instruction with {numCases} cases.");
+                            int totalBytes = 4 + (int)numCases * 4;
+                            if ((uint)i + totalBytes > code.Length)
                             {
-                                // Read the case offset relative to the start of the case table (i + 5)
-                                uint caseOffset = BitConverter.ToUInt32(code, (int)(i + 5 + j * 4)); // Little-endian
-
-                                // Calculate the target address
-                                uint targetAddress = (uint)i + 5 + caseOffset;
-
-                                Write($"\t\tIL_{targetAddress.ToString("X2")}");
-                                if (j < numCases - 1)
-                                {
-                                    Write(",\n");
-                                }
+                                throw new Exception("Invalid switch instruction: Not enough bytes in the code array.");
                             }
-                            WriteLine(")");
+
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            WriteLine($"\n\t{{\n");
+                            for (int j = 0; j < numCases; j++)
+                            {
+                                uint caseOffset = BitConverter.ToUInt32(code, (int)((uint)i + 5 + j * 4));
+                                uint caseAddress = (uint)(i + 5 + caseOffset);
+                                WriteLine($"\t\tIL_{caseAddress.ToString("X2")},");
+                            }
+                            WriteLine("\t}");
                             Console.ResetColor();
                         }
-
                         else if (instr.TotalOperands > 0)
                         {
                             Write(" (");
@@ -2920,17 +2877,20 @@ namespace IL2X64.IL.Syntax
 
                         i += skipBytes;
                     }
+
                     if (CLike)
                     {
-                        WriteLine("}");
+                        WriteLine("  }");
                     }
                 }
+
                 if (CLike)
                 {
                     WriteLine("}");
                 }
             }
         }
+
 
         private string ResolveObjectNameFromToken(uint metadataToken)
         {
@@ -3004,47 +2964,9 @@ namespace IL2X64.IL.Syntax
         {
             switch (pOpCode)
             {
-                //simple ones for now
-                case ILOpCodes.Nop:
-                    return "nop";
-                case ILOpCodes.Break:
-                    return "int 3";
-                case ILOpCodes.Add:
-                    return "pop rax\npop rbx\nadd rax, rbx\npush rax";
-                case ILOpCodes.Sub:
-                    return "pop rax\npop rbx\nsub rax, rbx\npush rax";
-                case ILOpCodes.Mul:
-                    return "pop rax\npop rbx\nimul rax, rbx\npush rax";
-                case ILOpCodes.Div:
-                    return "pop rbx\npop rax\nxor rdx, rdx\nidiv rbx\npush rax";
-                case ILOpCodes.Ldarg_0:
-                    return "mov rax, [rbp+16]";
-                case ILOpCodes.Ldarg_1:
-                    return "mov rax, [rbp+24]";
-                case ILOpCodes.Ldarg_2:
-                    return "mov rax, [rbp+32]";
-                case ILOpCodes.Ldarg_3:
-                    return "mov rax, [rbp+40]";
-                case ILOpCodes.Ldloc_0:
-                    return "mov rax, [rbp-8]";
-                case ILOpCodes.Ldloc_1:
-                    return "mov rax, [rbp-16]";
-                case ILOpCodes.Ldloc_2:
-                    return "mov rax, [rbp-24]";
-                case ILOpCodes.Ldloc_3:
-                    return "mov rax, [rbp-32]";
-                case ILOpCodes.Stloc_0:
-                    return "mov [rbp-8], rax";
-                case ILOpCodes.Stloc_1:
-                    return "mov [rbp-16], rax";
-                case ILOpCodes.Stloc_2:
-                    return "mov [rbp-24], rax";
-                case ILOpCodes.Stloc_3:
-                    return "mov [rbp-32], rax";
-                default:
-                    return "nop";
 
             }
+            return "";
         }
         public string ILMethod2Nasm(ILClass pClass, ILMethod pMethod)
         {
