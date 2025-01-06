@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "IL2X64": {
+      "commandName": "Project",
+      "commandLineArgs": ".\\zurelib.dll -c C:\\Users\\alexm\\source\\repos\\IL2X64\\out.il"
+    }
+  }
+}

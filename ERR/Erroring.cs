@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace IL2X64.Error
+namespace Gunner.IL.Error
 {
     public enum ILErrorType
     {
@@ -72,15 +72,15 @@ namespace IL2X64.Error
         MISC_UNKNOWN_ERROR = 0x6004
     }
 
-    public class IL2X64RuntimeException : Exception
+    public class GunnerRuntimeException : Exception
     {
         public ILErrorType iType;
-        public IL2X64RuntimeException? iChild; // Nesting for deeper error handling. E.g. IL_INVALID_SWITCH is called with a deeper error of IL_ARBITRARY_LIMIT_REACHED (aka. switch case limit reached)
-        public IL2X64RuntimeException(ILErrorType type, string message) : base(message)
+        public GunnerRuntimeException? iChild; // Nesting for deeper error handling. E.g. IL_INVALID_SWITCH is called with a deeper error of IL_ARBITRARY_LIMIT_REACHED (aka. switch case limit reached)
+        public GunnerRuntimeException(ILErrorType type, string message) : base(message)
         {
             iType = type;
         }
-        public IL2X64RuntimeException(ILErrorType type, string message, IL2X64RuntimeException child) : base(message)
+        public GunnerRuntimeException(ILErrorType type, string message, GunnerRuntimeException child) : base(message)
         {
             iType = type;
             iChild = child;

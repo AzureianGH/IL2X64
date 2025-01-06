@@ -1,4 +1,4 @@
-﻿using IL2X64.Error;
+﻿using Gunner.IL.Error;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -12,7 +12,7 @@ using System.Text;
 #pragma warning disable CS8602
 #pragma warning disable CS8620
 #pragma warning disable CS8618
-namespace IL2X64.IL.Syntax
+namespace Gunner.IL.Syntax
 {
     public enum ILOpCodes
     {
@@ -268,34 +268,6 @@ namespace IL2X64.IL.Syntax
         Ldarga,
         EndFault
     }
-
-    public struct ILOperand
-    {
-        public string Name;
-        public byte Value;
-    }
-    public struct ILInstruction
-    {
-        public string Name;
-        public ILOpCodes OpCode;
-        public byte[] Operands;
-        public uint TotalOperands;
-    }
-    public struct ILField
-    {
-        public string Name;
-        public string Type;
-
-        //!= operator
-        public static bool operator !=(ILField a, ILField b)
-        {
-            return a.Name != b.Name;
-        }
-        public static bool operator ==(ILField a, ILField b)
-        {
-            return a.Name == b.Name;
-        }
-    }
     [Flags]
     public enum ILProperties
     {
@@ -320,6 +292,35 @@ namespace IL2X64.IL.Syntax
         MethodImplementationFlags = 0x00000100 | 0x00000200 | 0x00000400 | 0x00000800, // Combination of method type flags
     }
 
+    #region ILStructs
+    public struct ILOperand
+    {
+        public string Name;
+        public byte Value;
+    }
+    public struct ILInstruction
+    {
+        public string Name;
+        public ILOpCodes OpCode;
+        public byte[] Operands;
+        public uint TotalOperands;
+    }
+
+    public struct ILField
+    {
+        public string Name;
+        public string Type;
+
+        //!= operator
+        public static bool operator !=(ILField a, ILField b)
+        {
+            return a.Name != b.Name;
+        }
+        public static bool operator ==(ILField a, ILField b)
+        {
+            return a.Name == b.Name;
+        }
+    }
     public struct ILMethod
     {
         public string Name;
@@ -345,16 +346,58 @@ namespace IL2X64.IL.Syntax
         public ILMethod[] Methods;
     }
 
+    // Decompiled
+
+    public struct DecompiledMethod
+    {
+        public string Name;
+        public string ReturnType;
+        public string[] Parameters;
+        public string[] Locals;
+        public ILInstruction[] Code;
+        public ILProperties Properties;
+    }
+
+    public struct DecompiledClass
+    {
+        public string Name;
+        public ILField[] Fields;
+        public DecompiledMethod[] Methods;
+        public ILProperties Properties;
+    }
+
+    public struct DecompiledAssembly
+    {
+        public DecompiledClass[] Classes;
+        public ILField[] Fields;
+        public DecompiledMethod[] Methods;
+    }
+
+    #endregion
+
+
+
+
+
     public class GunnerIL
     {
-        private List<ILClass> mClasses;
-        bool mAllowComments;
-        PEReader mPERdr;
+        #region Gunner Fields
         Assembly mAssembly;
-        Module mModule;
+        bool          mAllowComments;
+        bool          mVerbose;
+        FileStream    mFS;
+        List<ILClass> mClasses;
+        Module        mModule;
+        PEReader      mPERdr;
+        #endregion
+
+
+        #region Gunner Setup
+
         public GunnerIL()
         {
             mClasses = new List<ILClass>();
+            mVerbose = false;
         }
 
         public void SetParameters(bool pAllowComments)
@@ -377,6 +420,10 @@ namespace IL2X64.IL.Syntax
             ParseAssembly(metadataReader);
         }
 
+        #endregion
+
+
+        #region Byte Decompilation
         public ILInstruction ByteIL2ILOp(byte[] pByte, ulong pIndex, ref uint pSkipBytes)
         {
             pSkipBytes = 0;
@@ -2514,9 +2561,13 @@ namespace IL2X64.IL.Syntax
                 TotalOperands = 0
             };
         }
+        
+        
+        #endregion
 
+        
 
-
+        #region Section Parsing
         private void ParseAssembly(MetadataReader metadataReader)
         {
             foreach (var typeDefHandle in metadataReader.TypeDefinitions)
@@ -2601,19 +2652,34 @@ namespace IL2X64.IL.Syntax
 
             return methods.ToArray();
         }
+        #endregion
 
 
+        #region Helper Methods
         public ILClass[] GetClasses()
         {
             return mClasses.ToArray();
         }
-        FileStream fs;
+
+        public ILMethod[] GetMethods(ILClass pIClass)
+        {
+            return pIClass.Methods;
+        }
+
+        public ILField[] GetFields(ILClass pIClass)
+        {
+            return pIClass.Fields;
+        }
+        #endregion
+
+
+        #region Output Functions
         void WriteLine(string text)
         {
-            if (fs != null)
+            if (mFS != null)
             {
                 byte[] info = new UTF8Encoding(true).GetBytes(text + "\n");
-                fs.Write(info, 0, info.Length);
+                mFS.Write(info, 0, info.Length);
             }
             else
             {
@@ -2622,36 +2688,39 @@ namespace IL2X64.IL.Syntax
         }
         void Write(string text)
         {
-            if (fs != null)
+            if (mFS != null)
             {
                 byte[] info = new UTF8Encoding(true).GetBytes(text);
-                fs.Write(info, 0, info.Length);
+                mFS.Write(info, 0, info.Length);
             }
             else
             {
                 Console.Write(text);
             }
         }
-        bool useVerbose = false;
-        private void VerboseWrite(string text)
+        void VerboseWrite(string text)
         {
-            if (useVerbose)
+            if (mVerbose)
             {
                 Console.WriteLine(text);
             }
         }
+        #endregion
+
+
+        #region Debug Functions
         public void PrintILInfo(string outfile = "", bool CLike = false, bool Verbose = false)
         {
-            useVerbose = Verbose;
+            mVerbose = Verbose;
             ulong closeparen = 0;
             if (outfile != "")
             {
-                fs = new FileStream(outfile, FileMode.Create);
+                mFS = new FileStream(outfile, FileMode.Create);
                 VerboseWrite("Opened file for writing output to: " + outfile);
             }
             else
             {
-                fs = null;
+                mFS = null;
                 VerboseWrite("No file specified for output. Output will be written to the console.");
             }
 
@@ -2891,7 +2960,7 @@ namespace IL2X64.IL.Syntax
             }
         }
 
-
+        #endregion
         private string ResolveObjectNameFromToken(uint metadataToken)
         {
             //use the Module to find the object

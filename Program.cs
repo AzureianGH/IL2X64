@@ -1,25 +1,89 @@
-﻿using IL2X64.Error;
-using IL2X64.IL.Syntax;
-namespace IL2X64
+﻿using Gunner.IL.Error;
+using Gunner.IL.Syntax;
+namespace Gunner
 {
     internal class Program
     {
         static void Main(string[] args)
         {
-            string fil = "I:\\source\\CosmosNTFS\\bin\\Debug\\net6.0\\CosmosNTFS.dll";
-            string outdirect = "I:\\ZureLib\\IL2X64\\out.il";
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: gil <input file> [{-o/v/c} {--version} {--help/-?}] <output file>");
+                Environment.Exit(0);
+            }
+            if (args.Length == 1)
+            {
+                if (args[0] == "--version")
+                {
+                    Console.WriteLine("Gunner Intermediate Language Decompiler v1.0.0.0");
+                    Console.WriteLine("Written by: AzureianGH.");
+                    Console.WriteLine("License: MIT");
+                    Environment.Exit(0);
+                }
+                else if (args[0] == "--help" || args[0] == "-?")
+                {
+                    Console.WriteLine("Usage: gil <input file> [{-o/v/c} {--version} {--help/-?}] <output file>");
+                    Console.WriteLine("Options:");
+                    Console.WriteLine("  -o: Output the IL to the console.");
+                    Console.WriteLine("  -v: Verbose mode.");
+                    Console.WriteLine("  -c: Output the IL in C-like syntax.");
+                    Console.WriteLine("  --version: Display the version of the program.");
+                    Console.WriteLine("  --help/-?: Display this help message.");
+                    Console.WriteLine("  <input file>: The input file to decompile.");
+                    Console.WriteLine("  <output file>: The output file to write the decompiled IL to.");
+                    //Example of args
+                    Console.WriteLine("Example: gil test.dll -cv test.gil");
+                    Console.WriteLine("Example: gil test.dll -oc");
+                    Environment.Exit(0);
+                }
+            }
+            if (args.Length < 2)
+            {
+                Console.WriteLine("Usage: gil <input file> [{-o/v/c} {--version} {--help/-?}] <output file>");
+                Environment.Exit(1);
+            }
+
+            string fil = args[0];
+            bool Verbose = false;
+            bool Output = false;
+            bool CLike = false;
+
+            //check flags
+            string flag = args[1].Replace("-","");
+            if (flag.Contains("v"))
+            {
+                Verbose = true;
+            }
+            if (flag.Contains("o"))
+            {
+                Output = true;
+            }
+            if (flag.Contains("c"))
+            {
+                CLike = true;
+            }
+
+            string outdirect = "";
+            if (!Output)
+            {
+                outdirect = args[args.Length - 1];
+            }
+
+            // o = output
+            // v = verbose
+            // c = CLike
             try
             {
                 GunnerIL gunner = new GunnerIL();
                 gunner.SetParameters(true);
                 gunner.Load(fil);
-                gunner.PrintILInfo(outdirect, true, true);
+                gunner.PrintILInfo(outdirect, CLike, Verbose);
             }
             catch (Exception ex)
             {
-                if (ex is IL2X64RuntimeException)
+                if (ex is GunnerRuntimeException)
                 {
-                    IL2X64RuntimeException ex1 = (IL2X64RuntimeException)ex;
+                    GunnerRuntimeException ex1 = (GunnerRuntimeException)ex;
                     Console.ForegroundColor = ConsoleColor.White;
                     Console.BackgroundColor = ConsoleColor.Red;
                     if (ex1.iType == ILErrorType.IL_INVALID_SWITCH)
